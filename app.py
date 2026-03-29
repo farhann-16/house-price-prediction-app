@@ -2,7 +2,8 @@ import streamlit as st
 import pandas as pd
 import joblib
 import os
-import subprocess
+
+import train_model  # ✅ direct import (no subprocess)
 
 st.set_page_config(page_title="House Price Prediction", layout="wide")
 
@@ -15,33 +16,38 @@ st.markdown("Upload your dataset → Validate → Predict → Analyze → Downlo
 
 # -------------------- AUTO TRAIN --------------------
 if not os.path.exists(MODEL_FILE) or not os.path.exists(PIPELINE_FILE):
-    st.warning("⚠️ Model not found. Training model... Please wait ⏳")
+    st.warning("⚠️ Model not found. Training model... ⏳")
 
     try:
-        subprocess.run(["python", "train_model.py"], check=True)
+        train_model.train()
         st.success("✅ Model trained successfully!")
     except Exception as e:
-        st.error(f"❌ Error during training: {e}")
+        st.error(f"❌ Training failed: {e}")
         st.stop()
 
-# -------------------- LOAD --------------------
-model = joblib.load(MODEL_FILE)
-pipeline = joblib.load(PIPELINE_FILE)
+# -------------------- CACHED LOAD --------------------
+@st.cache_resource
+def load_artifacts():
+    model = joblib.load(MODEL_FILE)
+    pipeline = joblib.load(PIPELINE_FILE)
+    return model, pipeline
+
+model, pipeline = load_artifacts()
 
 # -------------------- SIDEBAR --------------------
 st.sidebar.title("📋 Required Columns")
 
 required_columns = list(pipeline.feature_names_in_)
 
-st.sidebar.markdown("Ensure your dataset contains these columns:")
+st.sidebar.markdown("Ensure your dataset contains:")
 
 for col in required_columns:
     st.sidebar.markdown(f"- `{col}`")
 
 st.sidebar.markdown("---")
-st.sidebar.info("Upload CSV → Click Predict → Download Results")
+st.sidebar.info("Upload CSV → Validate → Predict → Download")
 
-# -------------------- UPLOAD --------------------
+# -------------------- FILE UPLOAD --------------------
 uploaded_file = st.file_uploader("📁 Upload CSV file", type=["csv"])
 
 if uploaded_file is not None:
@@ -49,14 +55,14 @@ if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file)
 
-        st.subheader("👀 Uploaded Data Preview")
+        st.subheader("👀 Data Preview")
         st.dataframe(df.head(), use_container_width=True)
 
         # -------------------- VALIDATION --------------------
+        st.subheader("🔍 Column Validation")
+
         missing_cols = list(set(required_columns) - set(df.columns))
         extra_cols = list(set(df.columns) - set(required_columns))
-
-        st.subheader("🔍 Column Validation")
 
         if missing_cols:
             st.error(f"❌ Missing columns: {missing_cols}")
@@ -68,20 +74,18 @@ if uploaded_file is not None:
 
         st.success("✅ Dataset is valid")
 
-        # -------------------- PREDICT --------------------
-        if st.button("🚀 Run Prediction"):
+        # -------------------- PREDICTION BUTTON --------------------
+        if st.button("🚀 Run Prediction", use_container_width=True):
 
             with st.spinner("Generating predictions..."):
 
-                processed = pipeline.transform(df)
-                predictions = model.predict(processed)
-
-                df["prediction"] = predictions
+                # ✅ Use predict function from train_model
+                result_df = train_model.predict(df.copy())
 
             # -------------------- KPIs --------------------
-            avg_price = df["prediction"].mean()
-            max_price = df["prediction"].max()
-            min_price = df["prediction"].min()
+            avg_price = result_df["prediction"].mean()
+            max_price = result_df["prediction"].max()
+            min_price = result_df["prediction"].min()
 
             col1, col2, col3 = st.columns(3)
 
@@ -89,39 +93,36 @@ if uploaded_file is not None:
             col2.metric("📈 Max Price", f"₹ {max_price:,.0f}")
             col3.metric("📉 Min Price", f"₹ {min_price:,.0f}")
 
-            # -------------------- HIGHLIGHT --------------------
+            # -------------------- RESULTS TABLE --------------------
+            st.subheader("📈 Prediction Results Preview")
+
             def highlight_prediction(col):
                 if col.name == "prediction":
                     return ['background-color: #145a32; color: white; font-weight: bold'] * len(col)
                 return [''] * len(col)
 
-            styled_df = df.head().style \
+            styled_df = result_df.head().style \
                 .apply(highlight_prediction, axis=0) \
                 .format({"prediction": "{:,.2f}"})
 
-            st.subheader("📈 Prediction Results Preview")
             st.dataframe(styled_df, use_container_width=True)
 
             # -------------------- CHART --------------------
             st.subheader("📊 Price Distribution")
-            st.bar_chart(df["prediction"])
-
-            # -------------------- SAVE --------------------
-            os.makedirs("output", exist_ok=True)
-            output_path = "output/predictions.csv"
-            df.to_csv(output_path, index=False)
+            st.bar_chart(result_df["prediction"])
 
             # -------------------- DOWNLOAD --------------------
-            csv = df.to_csv(index=False).encode("utf-8")
+            csv = result_df.to_csv(index=False).encode("utf-8")
 
             st.download_button(
                 label="⬇️ Download Predictions",
                 data=csv,
                 file_name="predictions.csv",
-                mime="text/csv"
+                mime="text/csv",
+                use_container_width=True
             )
 
-            st.success("✅ Prediction completed & saved to output folder")
+            st.success("✅ Prediction completed successfully!")
 
     except Exception as e:
         st.error(f"⚠️ Error: {e}")
